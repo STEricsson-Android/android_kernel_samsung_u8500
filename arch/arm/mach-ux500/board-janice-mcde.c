@@ -138,7 +138,7 @@ struct ssg_dpi_display_platform_data janice_dpi_pri_display_info = {
 	.video_mode.vsw		= 2,
 	.video_mode.vbp		= 3 - 2,	/* -2 to allow for starting at end of vsw not start of vsw */
 	.video_mode.vfp		= 28,
-	.video_mode.interlaced 	= true,
+	.video_mode.interlaced 	= false,
 
 	/*
 	 * The pixclock setting is not used within MCDE. The clock is
