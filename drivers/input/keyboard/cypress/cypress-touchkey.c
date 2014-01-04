@@ -1124,7 +1124,7 @@ static int __init cypress_touchkey_init(void)
 			printk(KERN_ERR "Failed to create device(sec_touchkey)!\n");
 	}
 	
-	if (device_create_file(sec_touchkey, &dev_attr_notification)) < 0) {
+	if (device_create_file(sec_touchkey, &dev_attr_notification) < 0) {
 		printk(KERN_ERR "Failed to create device file(%s)!\n", dev_attr_notification.attr.name);
 	}
 
