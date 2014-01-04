@@ -106,6 +106,7 @@ struct cypress_touchkey_info {
 	unsigned char				keycode[NUM_OF_KEY];
 	int					irq;
 	int					code, press;
+	u8					notification_status;
 	u8					keybuf;
 	u8					fw_ver;
 	u8					mod_ver;
@@ -628,6 +629,12 @@ static int cypress_touchkey_suspend(struct device *dev)
 	FUNC_CALLED;
 
 	disable_irq(info->irq);
+
+	if (info->notification_status == 0) {
+		info->current_status = 0;
+		cypress_touchkey_con_hw(info, false);
+	}
+	
 	cypress_touchkey_con_hw(info, false);
 	return ret;
 }
@@ -1039,6 +1046,55 @@ static ssize_t touch_sensitivity_control(struct device *dev,
 	return size;
 }
 
+static ssize_t touch_led_notification(struct device *dev,
+          struct device_attribute *attr,
+          const char *buf,
+          size_t size)
+{
+  struct i2c_client *client = to_i2c_client(dev);
+  struct cypress_touchkey_info *info = i2c_get_clientdata(client);
+   int data;
+   int ret;
+ 
+   mutex_lock(&info->touchkey_mutex);
+   ret = sscanf(buf, "%d\n", &data);
+   if (unlikely(ret != 1)) {
+     pr_err("cptk: %s err\n", __func__);
+     mutex_unlock(&info->touchkey_mutex);
+     return -EINVAL;
+   }
+
+  /* Power on */
+  if (info && info->current_status == 0) {
+    
+    cypress_touchkey_con_hw(info, false);
+    info->current_status = 1;
+  }
+
+  if (data >= 1) {
+    /* LED on */
+    pr_info("info: touch_led_notification: LED ON");
+        cypress_touchkey_con_hw(info, true);
+        info->notification_status = CYPRESS_LED_ON;
+  } else {
+    /* LED off */
+    pr_info("info: touch_led_notification: LED OFF");
+    if (info->current_status != CYPRESS_LED_ON) {
+    cypress_touchkey_con_hw(info, false);
+    }
+    info->notification_status = CYPRESS_LED_OFF;
+  }
+
+  msleep(20);  /* To need a minimum 14ms. time at mode changing */
+  mutex_unlock(&info->touchkey_mutex);
+
+  return size;
+}
+
+static DEVICE_ATTR(notification, S_IRUGO | S_IWUSR | S_IWGRP,
+            NULL, touch_led_notification);
+
+
 static DEVICE_ATTR(touchkey_firm_version_panel, S_IRUGO | S_IWUSR | S_IWGRP, touch_version_read, touch_version_write);
 static DEVICE_ATTR(touchkey_firm_version_phone, S_IRUGO | S_IWUSR | S_IWGRP, touch_version_show, NULL);
 static DEVICE_ATTR(touchkey_firm_update, S_IRUGO | S_IWUSR | S_IWGRP, touch_update_read, touch_update_write);
@@ -1066,6 +1122,10 @@ static int __init cypress_touchkey_init(void)
 
 	if (IS_ERR(sec_touchkey)) {
 			printk(KERN_ERR "Failed to create device(sec_touchkey)!\n");
+	}
+	
+	if (device_create_file(sec_touchkey, &dev_attr_notification)) < 0) {
+		printk(KERN_ERR "Failed to create device file(%s)!\n", dev_attr_notification.attr.name);
 	}
 
 	if (device_create_file(sec_touchkey, &dev_attr_touchkey_firm_update) < 0) {
