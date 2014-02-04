@@ -258,7 +258,8 @@ struct ab8500_codec_drvdata {
 };
 
 /* cocafe: ABBamp module */
-#define ABBAMP_VERSION_TAG			"2.4"
+#define ABBAMP_VERSION_TAG			"2.4.5"
+#define ABBAMP_LAST_UPDATE			"2014.01.01"
 #define ABBAMP_DEBUG_LEVEL			0
 
 #define REG_FULLBITS				0xFF		/* 1111 1111 */
@@ -276,7 +277,7 @@ static void abbamp_control_hsrdiggain(void);
 static void abbamp_control_classdhpg(void);
 static void abbamp_control_classdwg(void);
 
-//static void abbamp_control_ponup(bool power_on);
+/* static void abbamp_control_ponup(void); */
 static void abbamp_control_hs(void);
 static void abbamp_control_hf(void);
 static void abbamp_control_earpiece(void);
@@ -406,6 +407,83 @@ static void abbamp_control_hshpen(void)
 	abbamp_write(REG_ANACONF1, REG_ANACONF1_HSHPEN, 1, hshpen_v);
 }
 
+/* AnaConf4
+ * Analog Output Enable.
+ * 
+ * [7] DisPdVss
+ * 0: Internal pull down on VssVcphs is enabled.
+ * 1: Internal pull down on VssVcphs is disabled.
+ * 
+ * [6] EnEar
+ * 0: The Ear Class-AB driver is powered down
+ * 1: The Ear Class-AB driver is powered up
+ * 
+ * [5] EnHsL
+ * 0: The HsL Driver is powered down
+ * 1: The HsL Driver is powered up
+ * 
+ * [4] EnHsR
+ * 0: The HsR Driver is powered down
+ * 1: The HsR Driver is powered up
+ * 
+ * [3] EnHfL
+ * 0: The HfL Class-D driver is powered down
+ * 1: The HfL Class-D driver is powered up
+ * 
+ * [2] EnHfR
+ * 0: The HfR Class-D driver is powered down
+ */
+
+/* When these bools are ture, the path will be disable */
+static bool hslanaena_con = false;
+static bool hsranaena_con = false;
+static bool hflanaena_con = false;
+static bool hfranaena_con = false;
+
+static void abbamp_control_hslanaena(void)
+{
+	abbamp_write(REG_ANACONF4, REG_ANACONF4_ENHSL, 1, 0);
+	pr_info("[ABB-Codec] AnaConf4 EnHsL widget\n");
+}
+
+static void abbamp_control_hsranaena(void)
+{
+	abbamp_write(REG_ANACONF4, REG_ANACONF4_ENHSR, 1, 0);
+	pr_info("[ABB-Codec] AnaConf4 EnHsR widget\n");
+}
+
+static void abbamp_control_hflanaena(void)
+{
+	abbamp_write(REG_ANACONF4, REG_ANACONF4_ENHFL, 1, 0);
+	pr_info("[ABB-Codec] AnaConf4 EnHfL widget\n");
+}
+
+static void abbamp_control_hfranaena(void)
+{
+	abbamp_write(REG_ANACONF4, REG_ANACONF4_ENHFR, 1, 0);
+	pr_info("[ABB-Codec] AnaConf4 EnHfR widget\n");
+}
+
+
+static void abbamp_control_anaconf4_hs(void)
+{
+	/* When it's TRUE, disable path */
+	if(hslanaena_con)
+		abbamp_control_hslanaena();
+
+	if(hsranaena_con)
+		abbamp_control_hsranaena();
+}
+
+static void abbamp_control_anaconf4_hf(void)
+{
+	if(hflanaena_con)
+		abbamp_control_hflanaena();
+
+	if(hfranaena_con)
+		abbamp_control_hfranaena();
+}
+
 /* ShortCirConf 
  * Short circuit configuration
  *
@@ -528,7 +606,7 @@ static void abbamp_control_classdwg(void)
 #define MUTE_AD2_MAX				0x3F
 
 static bool addiggain2_con = false;
-static unsigned int addiggain2_v = 16;
+static unsigned int addiggain2_v = 25;
 static unsigned int addiggain2_ms = 1000;
 
 static char *addiggain2_volmap[] = 
@@ -690,27 +768,27 @@ static void abbamp_control_hs(void)
 {
 	if (anagain3_con) {
 		abbamp_control_anagain3();
-		pr_err("abb-codec: AnaGain3\n");
+		pr_err("[ABB-Codec] AnaGain3 widget\n");
 	}
 	if (hslowpow_con) {
 		abbamp_control_hslowpow();
-		pr_err("abb-codec: HsLowPow\n");
+		pr_err("[ABB-Codec] HsLowPow widget\n");
 	}
 	if (hsdaclowpow_con) {
 		abbamp_control_hsdaclowpow();
-		pr_err("abb-codec: HsDacLowPow\n");
+		pr_err("[ABB-Codec] HsDacLowPow widget\n");
 	}
 	if (hshpen_con) {
 		abbamp_control_hshpen();
-		pr_err("abb-codec: HsHpEn\n");
+		pr_err("[ABB-Codec] HsHpEn widget\n");
 	}
 	if (hsldiggain_con) {
 		abbamp_control_hsleardiggain(hsldiggain_v);
-		pr_err("abb-codec: HsLDigGain\n");
+		pr_err("[ABB-Codec] HsLDigGain widget\n");
 	}
 	if (hsrdiggain_con) {
 		abbamp_control_hsrdiggain();
-		pr_err("abb-codec: HsRDigGain\n");
+		pr_err("[ABB-Codec] HsRDigGain widget\n");
 	}
 }
 
@@ -719,7 +797,7 @@ static void abbamp_control_earpiece(void)
 {
 	if (eardiggain_con) {
 		abbamp_control_hsleardiggain(eardiggain_v);
-		pr_err("abb-codec: EarDigGain\n");
+		pr_err("[ABB-Codec] EarDigGain widget\n");
 	}
 }
 
@@ -728,11 +806,11 @@ static void abbamp_control_hf(void)
 {
 	if (classdhpg_con) {
 		abbamp_control_classdhpg();
-		pr_err("abb-codec: ClassD-HPG\n");
+		pr_err("[ABB-Codec] ClassD-HPG widget\n");
 	}
 	if (classdwg_con) {
 		abbamp_control_classdwg();
-		pr_err("abb-codec: ClassD-WG\n");
+		pr_err("[ABB-Codec] ClassD-WG widget\n");
 	}
 }
 
@@ -741,7 +819,7 @@ static void abbamp_control_addiggain(void)
 {
 	if (addiggain2_con) {
 		schedule_work(&abbamp_ad2_work);
-		pr_err("abb-codec: AD2-DigGain\n");
+		pr_err("[ABB-Codec] AD2-DigGain widget\n");
 	}
 }
 
@@ -1693,14 +1771,15 @@ static int hs_dapm_event(struct snd_soc_dapm_widget *w,
 	case SND_SOC_DAPM_POST_PMU:
 		hs_ponup = true;
 		abbamp_control_hs();
+		abbamp_control_anaconf4_hs();
 		if (abbamp_dbg >= 1) {
-			pr_info("abb-codec: Hs power on\n");
+			pr_info("[ABB-Codec] Hs Power On\n");
 		}
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		hs_ponup = false;
 		if (abbamp_dbg >= 1) {
-			pr_info("abb-codec: Hs power off\n");
+			pr_info("[ABB-Codec] Hs Power Off\n");
 		}
 		mdelay(10);
 		break;
@@ -1715,8 +1794,9 @@ static int ihfr_dapm_event(struct snd_soc_dapm_widget *w,
 	case SND_SOC_DAPM_PRE_PMU:
 		hf_ponup = true;
 		abbamp_control_hf();
+		abbamp_control_anaconf4_hf();
 		if (abbamp_dbg >= 1) {
-			pr_info("abb-codec: IHfR power on\n");
+			pr_info("[ABB-Codec] IHfR Power On\n");
 		}
 		break;
 	case SND_SOC_DAPM_POST_PMD:
@@ -1725,7 +1805,7 @@ static int ihfr_dapm_event(struct snd_soc_dapm_widget *w,
 			abbamp_control_hs();
 		}
 		if (abbamp_dbg >= 1) {
-			pr_info("abb-codec: IHfR power off\n");
+			pr_info("[ABB-Codec] IHfR Power Off\n");
 		}
 		break;
 	}
@@ -1742,7 +1822,7 @@ static int earpiece_dapm_event(struct snd_soc_dapm_widget *w,
 			abbamp_control_earpiece();
 		}
 		if (abbamp_dbg >= 1) {
-			pr_info("abb-codec: EarPiece power on\n");
+			pr_info("[ABB-Codec] EarPiece Power On\n");
 		}
 		break;
 	case SND_SOC_DAPM_POST_PMD:
@@ -1751,7 +1831,7 @@ static int earpiece_dapm_event(struct snd_soc_dapm_widget *w,
 			abbamp_control_hs();
 		}
 		if (abbamp_dbg >= 1) {
-			pr_info("abb-codec: EarPiece power off\n");
+			pr_info("[ABB-Codec] EarPiece Power Off\n");
 		}
 		break;
 	}
@@ -1766,7 +1846,7 @@ static int ad2_dapm_event(struct snd_soc_dapm_widget *w,
 		ad2_ponup = true;
 		abbamp_control_addiggain();
 		if (abbamp_dbg >= 1) {
-			pr_info("abb-codec: ADDigGain2 power on\n");
+			pr_info("[ABB-Codec] ADDigGain2 Power On\n");
 		}
 		break;
 	case SND_SOC_DAPM_POST_PMD:
@@ -1775,7 +1855,7 @@ static int ad2_dapm_event(struct snd_soc_dapm_widget *w,
 			abbamp_control_hs();
 		}
 		if (abbamp_dbg >= 1) {
-			pr_info("abb-codec: ADDigGain2 power off\n");
+			pr_info("[ABB-Codec] ADDigGain2 Power Off\n");
 		}
 		break;
 	}
@@ -3687,7 +3767,7 @@ int ab850x_audio_power_control(bool power_on)
 		return -EIO;
 	}
 
-	pr_info("abb-codec: %s\n", (power_on) ? "Power on" : "Power off");
+	pr_info("[ABB-Codec] %s\n", (power_on) ? "Power On" : "Power Off");
 
 	return snd_soc_update_bits(ab850x_codec, REG_POWERUP,
 		pwr_mask, (power_on) ? pwr_mask : REG_MASK_NONE);
@@ -4632,13 +4712,13 @@ static ssize_t abb_codec_dbg_store(struct kobject *kobj,
 	ret = sscanf(buf, "%d", &val);
 
 	if ((ret < 0) || (val < 0)) {
-		pr_err("abb-codec: invalid inputs!\n");
+		pr_err("[ABB-Codec] invalid inputs!\n");
 		return -EINVAL;
 	}
 
 	abbamp_dbg = val;
 
-	pr_err("abb-codec: update debug level\n");
+	pr_err("[ABB-Codec] update debug level\n");
 
 	return count;
 }
@@ -4649,7 +4729,7 @@ static struct kobj_attribute abb_codec_dbg_interface = __ATTR(codec_dbg, 0644,
 static ssize_t abb_codec_vertag_show(struct kobject *kobj, 
 		struct kobj_attribute *attr, char *buf)
 {
-	return sprintf(buf, "Codec: %s\nABBamp: %s\n", ab850x_codec_id, ABBAMP_VERSION_TAG);
+	return sprintf(buf, "Codec: %s\nABBamp: %s (%s)\n", ab850x_codec_id, ABBAMP_VERSION_TAG, ABBAMP_LAST_UPDATE);
 }
 
 static struct kobj_attribute abb_codec_vertag_interface = __ATTR(codec_ver, 0444, 
@@ -4667,7 +4747,7 @@ static ssize_t abb_codec_write_store(struct kobject *kobj,
 	ret = sscanf(buf, "%x %x", &reg, &value);
 
 	if (ret < 0) {
-		pr_err("abb-codec: invalid inputs!\n");
+		pr_err("[ABB-Codec] invalid inputs!\n");
 		return -EINVAL;
 	}
 
@@ -4677,7 +4757,7 @@ static ssize_t abb_codec_write_store(struct kobject *kobj,
 
 	new = snd_soc_read(ab850x_codec, reg);
 
-	pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", reg, old, new);
+	pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", reg, old, new);
 
 	return count;
 }
@@ -4704,7 +4784,7 @@ static ssize_t abb_codec_bits_write_store(struct kobject *kobj,
 	ret = sscanf(buf, "%x %x %x %x", &reg, &shift, &width, &value);
 
 	if (ret < 0) {
-		pr_err("abb-codec: invalid inputs!\n");
+		pr_err("[ABB-Codec] invalid inputs!\n");
 		return -EINVAL;
 	}
 
@@ -4715,7 +4795,7 @@ static ssize_t abb_codec_bits_write_store(struct kobject *kobj,
 
 	ret = snd_soc_read(ab850x_codec, reg);
 
-	pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", reg, old, ret);
+	pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", reg, old, ret);
 
 	return count;
 }
@@ -4751,7 +4831,7 @@ static ssize_t abb_codec_anagain3_store(struct kobject *kobj,
 	int new, old, val, ret;
 
 	if (!strncmp(buf, "on", 2)) {
-		pr_err("abb-codec: enable AnaGain3 con\n");
+		pr_err("[ABB-Codec] enable AnaGain3 con\n");
 		
 		anagain3_con = true;
 		abbamp_control_anagain3();
@@ -4760,7 +4840,7 @@ static ssize_t abb_codec_anagain3_store(struct kobject *kobj,
 	}
 
 	if (!strncmp(buf, "off", 3)) {
-		pr_err("abb-codec: disable AnaGain3 con\n");
+		pr_err("[ABB-Codec] disable AnaGain3 con\n");
 
 		anagain3_con = false;
 
@@ -4778,7 +4858,7 @@ static ssize_t abb_codec_anagain3_store(struct kobject *kobj,
 		ret = sscanf(&buf[5], "%d", &val);
 
 		if ((ret < 0) || (val < 0) || (val > GAIN_ANAGAIN3_MAX)) {
-			pr_err("abb-codec: invalid inputs!\n");
+			pr_err("[ABB-Codec] invalid inputs!\n");
 			return -EINVAL;
 		}
 
@@ -4791,7 +4871,7 @@ static ssize_t abb_codec_anagain3_store(struct kobject *kobj,
 		abbamp_control_anagain3();
 
 		new = snd_soc_read(ab850x_codec, REG_ANAGAIN3);
-		pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", REG_ANAGAIN3, old, new);
+		pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", REG_ANAGAIN3, old, new);
 		
 		return count;
 	}
@@ -4801,7 +4881,7 @@ static ssize_t abb_codec_anagain3_store(struct kobject *kobj,
 		ret = sscanf(&buf[6], "%d", &val);
 
 		if ((ret < 0) || (val < 0) || (val > GAIN_ANAGAIN3_MAX)) {
-			pr_err("abb-codec: invalid inputs!\n");
+			pr_err("[ABB-Codec] invalid inputs!\n");
 			return -EINVAL;
 		}
 
@@ -4814,7 +4894,7 @@ static ssize_t abb_codec_anagain3_store(struct kobject *kobj,
 		abbamp_control_anagain3();
 
 		new = snd_soc_read(ab850x_codec, REG_ANAGAIN3);
-		pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", REG_ANAGAIN3, old, new);
+		pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", REG_ANAGAIN3, old, new);
 		
 		return count;
 	}
@@ -4824,7 +4904,7 @@ static ssize_t abb_codec_anagain3_store(struct kobject *kobj,
 		ret = sscanf(&buf[5], "%d", &val);
 
 		if ((ret < 0) || (val < 0) || (val > GAIN_ANAGAIN3_MAX)) {
-			pr_err("abb-codec: invalid inputs!\n");
+			pr_err("[ABB-Codec] invalid inputs!\n");
 			return -EINVAL;
 		}
 
@@ -4834,7 +4914,7 @@ static ssize_t abb_codec_anagain3_store(struct kobject *kobj,
 		abbamp_control_anagain3();
 
 		new = snd_soc_read(ab850x_codec, REG_ANAGAIN3);
-		pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", REG_ANAGAIN3, old, new);
+		pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", REG_ANAGAIN3, old, new);
 		
 		return count;
 	}
@@ -4876,7 +4956,7 @@ static ssize_t abb_codec_hsldiggain_store(struct kobject *kobj,
 	int new, old, val, ret;
 
 	if (!strncmp(buf, "on", 2)) {
-		pr_err("abb-codec: enable HsLDigGain con\n");
+		pr_err("[ABB-Codec] enable HsLDigGain con\n");
 		
 		hsldiggain_con = true;
 		abbamp_control_hsleardiggain(hsldiggain_v);
@@ -4885,7 +4965,7 @@ static ssize_t abb_codec_hsldiggain_store(struct kobject *kobj,
 	}
 
 	if (!strncmp(buf, "off", 3)) {
-		pr_err("abb-codec: disable HsLDigGain con\n");
+		pr_err("[ABB-Codec] disable HsLDigGain con\n");
 
 		hsldiggain_con = false;
 		if (hs_ponup) {
@@ -4901,7 +4981,7 @@ static ssize_t abb_codec_hsldiggain_store(struct kobject *kobj,
 		ret = sscanf(&buf[5], "%d", &val);
 
 		if ((ret < 0) || (val < 0) || (val > MUTE_HSLEARDIG_MAX)) {
-			pr_err("abb-codec: invalid inputs!\n");
+			pr_err("[ABB-Codec] invalid inputs!\n");
 			return -EINVAL;
 		}
 
@@ -4910,7 +4990,7 @@ static ssize_t abb_codec_hsldiggain_store(struct kobject *kobj,
 		abbamp_control_hsleardiggain(hsldiggain_v);
 
 		new = snd_soc_read(ab850x_codec, REG_HSLEARDIGGAIN);
-		pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", REG_HSLEARDIGGAIN, old, new);
+		pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", REG_HSLEARDIGGAIN, old, new);
 		
 		return count;
 	}
@@ -4952,7 +5032,7 @@ static ssize_t abb_codec_hsrdiggain_store(struct kobject *kobj,
 	int new, old, val, ret;
 
 	if (!strncmp(buf, "on", 2)) {
-		pr_err("abb-codec: enable HsRDigGain con\n");
+		pr_err("[ABB-Codec] enable HsRDigGain con\n");
 		
 		hsrdiggain_con = true;
 		abbamp_control_hsrdiggain();
@@ -4961,7 +5041,7 @@ static ssize_t abb_codec_hsrdiggain_store(struct kobject *kobj,
 	}
 
 	if (!strncmp(buf, "off", 3)) {
-		pr_err("abb-codec: disable HsRDigGain con\n");
+		pr_err("[ABB-Codec] disable HsRDigGain con\n");
 
 		hsrdiggain_con = false;
 		if (hs_ponup) {
@@ -4977,7 +5057,7 @@ static ssize_t abb_codec_hsrdiggain_store(struct kobject *kobj,
 		ret = sscanf(&buf[5], "%d", &val);
 
 		if ((ret < 0) || (val < 0) || (val > MUTE_HSRDIG_MAX)) {
-			pr_err("abb-codec: invalid inputs!\n");
+			pr_err("[ABB-Codec] invalid inputs!\n");
 			return -EINVAL;
 		}
 
@@ -4986,7 +5066,7 @@ static ssize_t abb_codec_hsrdiggain_store(struct kobject *kobj,
 		abbamp_control_hsrdiggain();
 
 		new = snd_soc_read(ab850x_codec, REG_HSRDIGGAIN);
-		pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", REG_HSRDIGGAIN, old, new);
+		pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", REG_HSRDIGGAIN, old, new);
 		
 		return count;
 	}
@@ -5028,7 +5108,7 @@ static ssize_t abb_codec_eardiggain_store(struct kobject *kobj,
 	int new, old, val, ret;
 
 	if (!strncmp(buf, "on", 2)) {
-		pr_err("abb-codec: enable EarDigGain con\n");
+		pr_err("[ABB-Codec] enable EarDigGain con\n");
 		
 		eardiggain_con = true;
 		if (ear_ponup) {
@@ -5039,7 +5119,7 @@ static ssize_t abb_codec_eardiggain_store(struct kobject *kobj,
 	}
 
 	if (!strncmp(buf, "off", 3)) {
-		pr_err("abb-codec: disable EarDigGain con\n");
+		pr_err("[ABB-Codec] disable EarDigGain con\n");
 
 		eardiggain_con = false;
 		if (ear_ponup) {
@@ -5055,7 +5135,7 @@ static ssize_t abb_codec_eardiggain_store(struct kobject *kobj,
 		ret = sscanf(&buf[5], "%d", &val);
 
 		if ((ret < 0) || (val < 0) || (val > MUTE_HSLEARDIG_MAX)) {
-			pr_err("abb-codec: invalid inputs!\n");
+			pr_err("[ABB-Codec] invalid inputs!\n");
 			return -EINVAL;
 		}
 
@@ -5066,7 +5146,7 @@ static ssize_t abb_codec_eardiggain_store(struct kobject *kobj,
 		}
 
 		new = snd_soc_read(ab850x_codec, REG_HSLEARDIGGAIN);
-		pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", REG_HSLEARDIGGAIN, old, new);
+		pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", REG_HSLEARDIGGAIN, old, new);
 		
 		return count;
 	}
@@ -5106,7 +5186,7 @@ static ssize_t abb_codec_hslowpow_store(struct kobject *kobj,
 	int new, old, val, ret;
 
 	if (!strncmp(buf, "on", 2)) {
-		pr_err("abb-codec: enable HsLowPow con\n");
+		pr_err("[ABB-Codec] enable HsLowPow con\n");
 		
 		hslowpow_con = true;
 		abbamp_control_hslowpow();
@@ -5115,7 +5195,7 @@ static ssize_t abb_codec_hslowpow_store(struct kobject *kobj,
 	}
 
 	if (!strncmp(buf, "off", 3)) {
-		pr_err("abb-codec: disable HsLowPow con\n");
+		pr_err("[ABB-Codec] disable HsLowPow con\n");
 
 		hslowpow_con = false;
 		if (hs_ponup) {
@@ -5130,7 +5210,7 @@ static ssize_t abb_codec_hslowpow_store(struct kobject *kobj,
 		ret = sscanf(&buf[5], "%d", &val);
 
 		if ((ret < 0) || (val < 0) || (val > 1)) {
-			pr_err("abb-codec: invalid inputs!\n");
+			pr_err("[ABB-Codec] invalid inputs!\n");
 			return -EINVAL;
 		}
 
@@ -5139,7 +5219,7 @@ static ssize_t abb_codec_hslowpow_store(struct kobject *kobj,
 		abbamp_control_hslowpow();
 
 		new = snd_soc_read(ab850x_codec, REG_ANACONF1);
-		pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", REG_ANACONF1, old, new);
+		pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", REG_ANACONF1, old, new);
 		
 		return count;
 	}
@@ -5179,7 +5259,7 @@ static ssize_t abb_codec_hsdaclowpow_store(struct kobject *kobj,
 	int new, old, val, ret;
 
 	if (!strncmp(buf, "on", 2)) {
-		pr_err("abb-codec: enable HsDACLowPow con\n");
+		pr_err("[ABB-Codec] enable HsDACLowPow con\n");
 		
 		hsdaclowpow_con = true;
 		abbamp_control_hsdaclowpow();
@@ -5188,7 +5268,7 @@ static ssize_t abb_codec_hsdaclowpow_store(struct kobject *kobj,
 	}
 
 	if (!strncmp(buf, "off", 3)) {
-		pr_err("abb-codec: disable HsDACLowPow con\n");
+		pr_err("[ABB-Codec] disable HsDACLowPow con\n");
 
 		hsdaclowpow_con = false;
 		if (hs_ponup) {
@@ -5203,7 +5283,7 @@ static ssize_t abb_codec_hsdaclowpow_store(struct kobject *kobj,
 		ret = sscanf(&buf[5], "%d", &val);
 
 		if ((ret < 0) || (val < 0) || (val > 3)) {
-			pr_err("abb-codec: invalid inputs!\n");
+			pr_err("[ABB-Codec] invalid inputs!\n");
 			return -EINVAL;
 		}
 
@@ -5212,7 +5292,7 @@ static ssize_t abb_codec_hsdaclowpow_store(struct kobject *kobj,
 		abbamp_control_hsdaclowpow();
 
 		new = snd_soc_read(ab850x_codec, REG_ANACONF1);
-		pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", REG_ANACONF1, old, new);
+		pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", REG_ANACONF1, old, new);
 		
 		return count;
 	}
@@ -5252,7 +5332,7 @@ static ssize_t abb_codec_hshpen_store(struct kobject *kobj,
 	int new, old, val, ret;
 
 	if (!strncmp(buf, "on", 2)) {
-		pr_err("abb-codec: enable HsHpEn con\n");
+		pr_err("[ABB-Codec] enable HsHpEn con\n");
 		
 		hshpen_con = true;
 		abbamp_control_hshpen();
@@ -5261,7 +5341,7 @@ static ssize_t abb_codec_hshpen_store(struct kobject *kobj,
 	}
 
 	if (!strncmp(buf, "off", 3)) {
-		pr_err("abb-codec: disable HsHpEn con\n");
+		pr_err("[ABB-Codec] disable HsHpEn con\n");
 
 		hshpen_con = false;
 		if (hs_ponup) {
@@ -5276,7 +5356,7 @@ static ssize_t abb_codec_hshpen_store(struct kobject *kobj,
 		ret = sscanf(&buf[5], "%d", &val);
 
 		if ((ret < 0) || (val < 0) || (val > 1)) {
-			pr_err("abb-codec: invalid inputs!\n");
+			pr_err("[ABB-Codec] invalid inputs!\n");
 			return -EINVAL;
 		}
 
@@ -5285,7 +5365,7 @@ static ssize_t abb_codec_hshpen_store(struct kobject *kobj,
 		abbamp_control_hshpen();
 
 		new = snd_soc_read(ab850x_codec, REG_ANACONF1);
-		pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", REG_ANACONF1, old, new);
+		pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", REG_ANACONF1, old, new);
 		
 		return count;
 	}
@@ -5319,6 +5399,102 @@ static ssize_t abb_codec_anaconf1_show(struct kobject *kobj,
 static struct kobj_attribute abb_codec_anaconf1_interface = __ATTR(anaconf1, 0444, 
 				abb_codec_anaconf1_show, NULL);
 
+static ssize_t abb_codec_anaconf4_show(struct kobject *kobj, 
+		struct kobj_attribute *attr, char *buf)
+{
+	sprintf(buf, "Analog Path Enable:\n");
+	sprintf(buf, "%s\n", buf);
+	sprintf(buf, "%s[IDX][DIS][MEM]\n", buf);
+	sprintf(buf, "%s[2]  [%d]  [%s]  Headset Left Enable\n", buf, 
+			hslanaena_con, abbamp_read(REG_ANACONF4, REG_ANACONF4_ENHSL, 1) ? "*" : " ");
+	sprintf(buf, "%s[3]  [%d]  [%s]  Headset Right Enable\n", buf, 
+			hsranaena_con, abbamp_read(REG_ANACONF4, REG_ANACONF4_ENHSR, 1) ? "*" : " ");
+	sprintf(buf, "%s[4]  [%d]  [%s]  Speaker Left Enable\n", buf, 
+			hflanaena_con, abbamp_read(REG_ANACONF4, REG_ANACONF4_ENHFL, 1) ? "*" : " ");
+	sprintf(buf, "%s[5]  [%d]  [%s]  Speaker Right Enable\n", buf, 
+			hfranaena_con, abbamp_read(REG_ANACONF4, REG_ANACONF4_ENHFR, 1) ? "*" : " ");
+
+	return strlen(buf);
+}
+
+static ssize_t abb_codec_anaconf4_store(struct kobject *kobj, 
+		struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	int sft, dis, ret;
+	
+	/* CMD: Index Disable? */
+	ret = sscanf(buf, "%d %d", &sft, &dis);
+	
+	if ((ret < 0) || (sft < 2) || (sft > 5) || ((dis != 0) && (dis != 1)))
+	{
+		pr_err("[ABB-Codec] invalid inputs\n");
+		return -EINVAL;
+	}
+
+	switch (sft)
+	{
+		case 2:
+			if (dis) {
+				/* Disable */
+				hslanaena_con = true;
+			} else {
+				hslanaena_con = false;
+				
+				/* Restore default state */
+				if (hs_ponup)
+					abbamp_write(REG_ANACONF4, REG_ANACONF4_ENHSL, 1, 1);
+			}
+
+			break;
+
+		case 3:
+			if (dis) {
+				hsranaena_con = true;
+			} else {
+				hsranaena_con = false;
+
+				if (hs_ponup)
+					abbamp_write(REG_ANACONF4, REG_ANACONF4_ENHSR, 1, 1);
+			}
+
+			break;
+
+		case 4:
+			if (dis) {
+				hflanaena_con = true;
+			} else {
+				hflanaena_con = false;
+
+				if (hf_ponup)
+					abbamp_write(REG_ANACONF4, REG_ANACONF4_ENHFL, 1, 1);
+			}
+
+			break;
+
+		case 5:
+			if (dis) {
+				hfranaena_con = true;
+			} else {
+				hfranaena_con = false;
+
+				if (hf_ponup)
+					abbamp_write(REG_ANACONF4, REG_ANACONF4_ENHFR, 1, 1);
+			}
+
+			break;
+	}
+
+	abbamp_control_anaconf4_hs();
+	abbamp_control_anaconf4_hf();
+
+	pr_info("[ABB-Codec] AnaConf4 [%d] : [%d]\n", sft, abbamp_read(REG_ANACONF4, sft, 1));
+
+	return count;
+}
+
+static struct kobj_attribute abb_codec_anaconf4_interface = __ATTR(anaconf4, 0644, 
+				abb_codec_anaconf4_show, abb_codec_anaconf4_store);
+
 static ssize_t abb_codec_shortcir_show(struct kobject *kobj, 
 		struct kobj_attribute *attr, char *buf)
 {
@@ -5345,7 +5521,7 @@ static ssize_t abb_codec_shortcir_store(struct kobject *kobj,
 	
 	if ((ret < 0) || (sft < 0) || (sft > 7) || ((val != 0) && (val != 1)))
 	{
-		pr_err("abb-codec: invalid inputs\n");
+		pr_err("[ABB-Codec] invalid inputs\n");
 		return -EINVAL;
 	}
 
@@ -5390,7 +5566,7 @@ static ssize_t abb_codec_classdhpg_store(struct kobject *kobj,
 	int new, old, val, ret;
 
 	if (!strncmp(buf, "on", 2)) {
-		pr_err("abb-codec: enable ClassDHPG con\n");
+		pr_err("[ABB-Codec] enable ClassDHPG con\n");
 		
 		classdhpg_con = true;
 		abbamp_control_classdhpg();
@@ -5399,7 +5575,7 @@ static ssize_t abb_codec_classdhpg_store(struct kobject *kobj,
 	}
 
 	if (!strncmp(buf, "off", 3)) {
-		pr_err("abb-codec: disable ClassDHPG con\n");
+		pr_err("[ABB-Codec] disable ClassDHPG con\n");
 
 		classdhpg_con = false;
 		/* 0100 xxxx */
@@ -5415,7 +5591,7 @@ static ssize_t abb_codec_classdhpg_store(struct kobject *kobj,
 		ret = sscanf(&buf[5], "%d", &val);
 
 		if ((ret < 0) || (val < 0) || (val > GAIN_CLASSDDIR_MAX)) {
-			pr_err("abb-codec: invalid inputs!\n");
+			pr_err("[ABB-Codec] invalid inputs!\n");
 			return -EINVAL;
 		}
 
@@ -5424,7 +5600,7 @@ static ssize_t abb_codec_classdhpg_store(struct kobject *kobj,
 		abbamp_control_classdhpg();
 
 		new = snd_soc_read(ab850x_codec, REG_ANACONF1);
-		pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", REG_CLASSDCONF3, old, new);
+		pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", REG_CLASSDCONF3, old, new);
 		
 		return count;
 	}
@@ -5468,7 +5644,7 @@ static ssize_t abb_codec_classdwg_store(struct kobject *kobj,
 	int new, old, val, ret;
 
 	if (!strncmp(buf, "on", 2)) {
-		pr_err("abb-codec: enable ClassDWG con\n");
+		pr_err("[ABB-Codec] enable ClassDWG con\n");
 		
 		classdwg_con = true;
 		abbamp_control_classdwg();
@@ -5477,7 +5653,7 @@ static ssize_t abb_codec_classdwg_store(struct kobject *kobj,
 	}
 
 	if (!strncmp(buf, "off", 3)) {
-		pr_err("abb-codec: disable ClassDWG con\n");
+		pr_err("[ABB-Codec] disable ClassDWG con\n");
 
 		classdwg_con = false;
 		/* xxxx 0100 */
@@ -5493,7 +5669,7 @@ static ssize_t abb_codec_classdwg_store(struct kobject *kobj,
 		ret = sscanf(&buf[5], "%d", &val);
 
 		if ((ret < 0) || (val < 0) || (val > GAIN_CLASSDDIR_MAX)) {
-			pr_err("abb-codec: invalid inputs!\n");
+			pr_err("[ABB-Codec] invalid inputs!\n");
 			return -EINVAL;
 		}
 
@@ -5502,7 +5678,7 @@ static ssize_t abb_codec_classdwg_store(struct kobject *kobj,
 		abbamp_control_classdwg();
 
 		new = snd_soc_read(ab850x_codec, REG_ANACONF1);
-		pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", REG_CLASSDCONF3, old, new);
+		pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", REG_CLASSDCONF3, old, new);
 		
 		return count;
 	}
@@ -5524,7 +5700,7 @@ static ssize_t abb_codec_addiggain2_show(struct kobject *kobj,
 	sprintf(buf, "%s\n", buf);
 
 	sprintf(buf, "%sGain(mem):\t%02d (%s)\n", buf, gain_mem, addiggain2_volmap[gain_mem]);
-	sprintf(buf, "%sGain(user):\t%02d (%s)\n", buf, hsldiggain_v, addiggain2_volmap[addiggain2_v]);
+	sprintf(buf, "%sGain(user):\t%02d (%s)\n", buf, addiggain2_v, addiggain2_volmap[addiggain2_v]);
 
 	return strlen(buf);
 }
@@ -5535,7 +5711,7 @@ static ssize_t abb_codec_addiggain2_store(struct kobject *kobj,
 	int new, old, val, ret;
 
 	if (!strncmp(buf, "on", 2)) {
-		pr_err("abb-codec: enable AD2DigGain con\n");
+		pr_err("[ABB-Codec] enable AD2DigGain con\n");
 		
 		addiggain2_con = true;
 		/* Set directly */
@@ -5547,7 +5723,7 @@ static ssize_t abb_codec_addiggain2_store(struct kobject *kobj,
 	}
 
 	if (!strncmp(buf, "off", 3)) {
-		pr_err("abb-codec: disable AD2DigGain con\n");
+		pr_err("[ABB-Codec] disable AD2DigGain con\n");
 
 		addiggain2_con = false;
 		if (ad2_ponup) {
@@ -5563,7 +5739,7 @@ static ssize_t abb_codec_addiggain2_store(struct kobject *kobj,
 		ret = sscanf(&buf[5], "%d", &val);
 
 		if ((ret < 0) || (val < 0) || (val > MUTE_AD2_MAX)) {
-			pr_err("abb-codec: invalid inputs!\n");
+			pr_err("[ABB-Codec] invalid inputs!\n");
 			return -EINVAL;
 		}
 
@@ -5575,7 +5751,7 @@ static ssize_t abb_codec_addiggain2_store(struct kobject *kobj,
 		}
 
 		new = snd_soc_read(ab850x_codec, REG_ADDIGGAIN2);
-		pr_err("abb-codec: REG[%#04x] %#04x -> %#04x\n", REG_ADDIGGAIN2, old, new);
+		pr_err("[ABB-Codec] REG[%#04x] %#04x -> %#04x\n", REG_ADDIGGAIN2, old, new);
 		
 		return count;
 	}
@@ -5598,6 +5774,7 @@ static struct attribute *abb_codec_attrs[] = {
 	&abb_codec_hsdaclowpow_interface.attr, 
 	&abb_codec_hshpen_interface.attr, 
 	&abb_codec_anaconf1_interface.attr, 
+	&abb_codec_anaconf4_interface.attr, 
 	&abb_codec_eardiggain_interface.attr, 
 	&abb_codec_shortcir_interface.attr, 
 	&abb_codec_classdhpg_interface.attr, 
@@ -5714,14 +5891,14 @@ static int __devinit ab850x_codec_driver_probe(struct platform_device *pdev)
 	abb_codec_kobject = kobject_create_and_add("abb-codec", kernel_kobj);
 
 	if (!abb_codec_kobject) {
-		pr_info("abb-codec: faile to create kobjects\n");
+		pr_info("[ABB-Codec] Failed to create kobjects\n");
 		return -ENOMEM;
 	}
 
 	err = sysfs_create_group(abb_codec_kobject, &abb_codec_interface_group);
 
 	if (err) {
-		pr_info("abb-codec: faile to register sysfs\n");
+		pr_info("[ABB-Codec] Failed to register sysfs\n");
 		kobject_put(abb_codec_kobject);
 	}
 
