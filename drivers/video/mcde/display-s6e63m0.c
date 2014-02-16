@@ -76,7 +76,7 @@
 #define LDI_STATE_ON		1
 #define LDI_STATE_OFF		0
 /* Taken from the programmed value of the LCD clock in PRCMU */
-#define PIX_CLK_FREQ		27687000
+#define PIX_CLK_FREQ		25000000
 #define VMODE_XRES		480
 #define VMODE_YRES		800
 #define POWER_IS_ON(pwr)	((pwr) <= FB_BLANK_NORMAL)
@@ -191,6 +191,56 @@ static int gamma_val;
 static bool illumination_req = false;
 static unsigned int illumination_val = ILLUMINATION_MIN;
 
+/* cocafe: S6E63M0 PRCMU LCDCLK */
+/* 60+++ 	79872000	unsafe
+ * 60++		66560000	unsafe
+ * 60+		57051428	unsafe
+ * 60		49920000
+ * 50		39936000
+ * 45		36305454
+ * 40		33280000
+ */
+#include <linux/mfd/dbx500-prcmu.h>
+#include <linux/mfd/db8500-prcmu.h>
+
+#define LCDCLK_SET(clk)		prcmu_set_clock_rate(PRCMU_LCDCLK, (unsigned long) clk);
+
+struct lcdclk_prop
+{
+	char *name;
+	unsigned int clk;
+};
+
+static struct lcdclk_prop lcdclk_prop[] = {
+	[0] = {
+		.name = "60Hz",
+		.clk = 49920000,
+	},
+	[1] = {
+		.name = "50Hz",
+		.clk = 39936000,
+	},
+	[2] = {
+		.name = "45Hz",
+		.clk = 36305454,
+	},
+	[3] = {
+		.name = "40Hz",
+		.clk = 33280000,
+	},
+};
+
+static unsigned int lcdclk_usr = 0;	/* 60fps */
+
+static void s6e63m0_lcdclk_thread(struct work_struct *s6e6m0_lcdclk_work)
+{
+	msleep(200);
+
+	pr_err("[S6E63M0] LCDCLK %dHz\n", lcdclk_prop[lcdclk_usr].clk);
+
+	LCDCLK_SET(lcdclk_prop[lcdclk_usr].clk);
+}
+static DECLARE_WORK(s6e63m0_lcdclk_work, s6e63m0_lcdclk_thread);
 
 #ifdef SMART_DIMMING
 #define LDI_MTP_LENGTH 21
@@ -760,8 +810,6 @@ static int s6e63m0_apply_config(struct mcde_display_device *ddev)
 {
 	int ret;
 
-	pr_info("%s: Called\n", __func__);
-
 	if (!ddev->update_flags)
 		return 0;
 
@@ -1040,7 +1088,7 @@ int illumination_tabel[] =
 };
 #else
 int illumination_tabel[] = {
-30, 40, 50, 60, 70, 80, 90,
+25, 40, 50, 60, 70, 80, 90,
 100, 105, 110, 120, 130, 140,
 150, 160, 170, 173, 180, 193,
 198, 203, 213, 223, 233, 243,
@@ -1534,7 +1582,7 @@ static void s6e63mo_read_mtp_info(struct s6e63m0 *lcd)
 				(u8 *)(&(lcd->smart.MTP)), LDI_MTP_LENGTH);
 
 	for(i=0;i<LDI_MTP_LENGTH;i++) {
-		printk("%s main_mtp_data[%d] : %02x\n",__func__, i,
+		printk("[S6E63M0] MainMTPData [%d] : %02x\n", i,
 				((char*)&(lcd->smart.MTP))[i]);
 	}
 
@@ -1549,7 +1597,7 @@ static void s6e63mo_mtp_from_boot(struct s6e63m0 *lcd, char *mtp)
 	memcpy(&(lcd->smart.MTP), mtp, LDI_MTP_LENGTH);
 
 	for (i = 0; i < LDI_MTP_LENGTH; i++) {
-		printk("%s main_mtp_data[%d] : %02x\n", __func__, i,
+		printk("[S6E63M0] MainMTPData [%d] %02x\n", i,
 				((char *)&(lcd->smart.MTP))[i]);
 	}
 	Smart_dimming_init(&(lcd->smart));
@@ -1576,7 +1624,7 @@ static int update_brightness(struct s6e63m0 *lcd, u8 force)
 	if ((force) || ((lcd->ldi_state) &&
 				(lcd->current_brightness != lcd->bl))) {
 
-	printk("s6e63m0: brightness [%d] gamma [%d]\n", bl, lcd->bl);
+	printk("[S6E63M0] Brightness: %d BL: %d\n", bl, lcd->bl);
 
 		ret = s6e63m0_set_elvss(lcd);
 		if (ret) {
@@ -1857,7 +1905,7 @@ device_attribute *attr, const char *buf, size_t size)
 	if (rc < 0)
 		return rc;
 	else{
-		dev_info(dev, "acl_set_store - %d, %d\n", lcd->acl_enable, value);
+		pr_info("[S6E63M0] Power reduce %d ==> %d\n", lcd->acl_enable, value);
 		if (lcd->acl_enable != value) {
 			lcd->acl_enable = value;
 			if (lcd->ldi_state)
@@ -1894,7 +1942,7 @@ static ssize_t auto_brightness_store(struct device *dev,
 		return rc;
 	else {
 		if (lcd->auto_brightness != value) {
-			dev_info(dev, "%s - %d, %d\n", __func__, lcd->auto_brightness, value);
+			pr_err("[S6E63M0] Auto Brightness %d ==> %d\n", lcd->auto_brightness, value);
 			mutex_lock(&lcd->lcd_lock);
 			lcd->auto_brightness = value;
 			mutex_unlock(&lcd->lcd_lock);
@@ -1927,21 +1975,10 @@ static ssize_t s6e63m0_sysfs_show_gamma_mode(struct device *dev,
 				      struct device_attribute *attr, char *buf)
 {
 	struct s6e63m0 *lcd = dev_get_drvdata(dev);
-	char temp[10];
 
-	switch (lcd->gamma_mode) {
-	case 0:
-		sprintf(temp, "2.2 mode\n");
-		strcat(buf, temp);
-		break;
-	case 1:
-		sprintf(temp, "1.9 mode\n");
-		strcat(buf, temp);
-		break;
-	default:
-		dev_dbg(dev, "gamma mode could be 2.2 or 1.9)n");
-		break;
-	}
+	sprintf(buf, "Current: %s\n\n", lcd->gamma_mode ? "1.9" : "2.2");
+	sprintf(buf, "%s[0][%s] 2.2 mode\n", buf, lcd->gamma_mode ? " " : "*");
+	sprintf(buf, "%s[1][%s] 1.9 mode\n", buf, lcd->gamma_mode ? "*" : " ");
 
 	return strlen(buf);
 }
@@ -1963,7 +2000,7 @@ static ssize_t s6e63m0_sysfs_store_gamma_mode(struct device *dev,
 		dev_err(dev, "there are only 2 types of gamma mode(0:2.2, 1:1.9)\n");
 	}
 	else
-		dev_info(dev, "%s :: gamma_mode=%d\n", __FUNCTION__, lcd->gamma_mode);
+		pr_info("[S6E63M0] Gamma mode ==> %d\n", lcd->gamma_mode);
 
 	if (lcd->ldi_state)
 	{
@@ -2029,12 +2066,12 @@ static ssize_t s6e63m0_sysfs_store_gamma_table(struct device *dev,
 
 	/* 2.2 mode */ /* smart dimming only */
 	if (lcd->gamma_mode || !is_load_mtp_offset) {
-		pr_info("s6e63m0: not proper gamma mode\n");
+		pr_info("[S6E63M0] not proper gamma mode\n");
 		return -EINVAL;
 	}
 
 	if (!strncmp(buf, "reset", 5)) {
-		pr_err("s6e63m0: remove gamma table request\n");
+		pr_err("[S6E63M0] remove gamma table request\n");
 		gamma_table_req = false;
 		s6e63m0_gamma_ctl(lcd);
 
@@ -2055,12 +2092,12 @@ static ssize_t s6e63m0_sysfs_store_gamma_table(struct device *dev,
 				&buf_table[20]);
 
 	if (!ret) {
-		pr_info("s6e63m0: invalid input(s)\n");
+		pr_info("[S6E63M0] invalid input(s)\n");
 	}
 
 	for (i = 0; i < 20; i++) {
 		if (buf_table[i] < 0 || buf_table[i] > 255) {
-			pr_info("s6e63m0: invalid input: [%02d]\n", i);
+			pr_info("[S6E63M0] invalid input: [%02d]\n", i);
 			return -EINVAL;
 		}
 	}
@@ -2092,12 +2129,12 @@ static ssize_t s6e63m0_sysfs_store_gamma_tune(struct device *dev,
 
 	/* 2.2 mode */ /* smart dimming only */
 	if (lcd->gamma_mode || !is_load_mtp_offset) {
-		pr_info("s6e63m0: not proper gamma mode\n");
+		pr_info("[S6E63M0] not proper gamma mode\n");
 		return -EINVAL;
 	}
 
 	if (!strncmp(buf, "reset", 5)) {
-		pr_info("s6e63m0: reset tune gamma request\n");
+		pr_info("[S6E63M0] reset tune gamma request\n");
 		gamma_req = false;
 		s6e63m0_gamma_ctl(lcd);
 		return len;
@@ -2106,12 +2143,12 @@ static ssize_t s6e63m0_sysfs_store_gamma_tune(struct device *dev,
 	ret = sscanf(buf, "%x %x", &buf_offset, &buf_val);
 
 	if (!ret) {
-		pr_info("s6e63m0: invalid input(s)\n");
+		pr_info("[S6E63M0] invalid input(s)\n");
 		return -EINVAL;
 	}
 
 	if ((buf_offset < 0) || (buf_offset > 47) || (buf_val < 0) || (buf_val > 255)) {
-		pr_info("s6e63m0: invalid input(s)\n");
+		pr_info("[S6E63M0] invalid input(s)\n");
 		return -EINVAL;
 	}
 
@@ -2123,7 +2160,7 @@ static ssize_t s6e63m0_sysfs_store_gamma_tune(struct device *dev,
 
 	s6e63m0_gamma_ctl(lcd);
 
-	pr_info("s6e63m0: Gamma [%02d] %#04X -> %#04X\n", gamma_offset, buf_orig, s6e63m0_22_gamma_table[gamma_offset]);
+	pr_info("[S6E63M0] Gamma [%02d] %#04X -> %#04X\n", gamma_offset, buf_orig, s6e63m0_22_gamma_table[gamma_offset]);
 
 	return len;
 }
@@ -2149,12 +2186,12 @@ static ssize_t s6e63m0_sysfs_store_filter_R(struct device *dev,
 
 	/* 2.2 mode */ /* smart dimming only */
 	if (lcd->gamma_mode || !is_load_mtp_offset) {
-		pr_info("s6e63m0: not proper gamma mode\n");
+		pr_info("[S6E63M0] not proper gamma mode\n");
 		return -EINVAL;
 	}
 
 	if (!strncmp(buf, "reset", 5)) {
-		pr_info("s6e63m0: reset R filter\n");
+		pr_info("[S6E63M0] reset R filter\n");
 
 		R_req = false;
 		s6e63m0_gamma_ctl(lcd);
@@ -2165,7 +2202,7 @@ static ssize_t s6e63m0_sysfs_store_filter_R(struct device *dev,
 	ret = sscanf(buf, "%d", &buf_val);
 
 	if (!ret) {
-		pr_info("s6e63m0: invalid input\n");
+		pr_info("[S6E63M0] invalid input\n");
 	}
 
 	if (buf_val >= GAMMA_VAL_MIN && buf_val <= GAMMA_VAL_MAX) {
@@ -2176,9 +2213,9 @@ static ssize_t s6e63m0_sysfs_store_filter_R(struct device *dev,
 
 		s6e63m0_gamma_ctl(lcd);
 
-		pr_info("s6e63m0: [R] %#04X -> %#04X\n", buf_R, s6e63m0_22_gamma_table[R_OFFSET]);
+		pr_info("[S6E63M0] [R] %#04X -> %#04X\n", buf_R, s6e63m0_22_gamma_table[R_OFFSET]);
 	} else {
-		pr_info("s6e63m0: invalid input\n");
+		pr_info("[S6E63M0] invalid input\n");
 	}
 
 	return len;
@@ -2205,12 +2242,12 @@ static ssize_t s6e63m0_sysfs_store_filter_G(struct device *dev,
 
 	/* 2.2 mode */ /* smart dimming only */
 	if (lcd->gamma_mode || !is_load_mtp_offset) {
-		pr_info("s6e63m0: not proper gamma mode\n");
+		pr_info("[S6E63M0] not proper gamma mode\n");
 		return -EINVAL;
 	}
 
 	if (!strncmp(buf, "reset", 5)) {
-		pr_info("s6e63m0: reset G filter\n");
+		pr_info("[S6E63M0] reset G filter\n");
 
 		G_req = false;
 		s6e63m0_gamma_ctl(lcd);
@@ -2221,7 +2258,7 @@ static ssize_t s6e63m0_sysfs_store_filter_G(struct device *dev,
 	ret = sscanf(buf, "%d", &buf_val);
 
 	if (!ret) {
-		pr_info("s6e63m0: invalid input\n");
+		pr_info("[S6E63M0] invalid input\n");
 	}
 
 	if (buf_val >= GAMMA_VAL_MIN && buf_val <= GAMMA_VAL_MAX) {
@@ -2232,9 +2269,9 @@ static ssize_t s6e63m0_sysfs_store_filter_G(struct device *dev,
 
 		s6e63m0_gamma_ctl(lcd);
 
-		pr_info("s6e63m0: [G] %#04X -> %#04X\n", buf_G, s6e63m0_22_gamma_table[G_OFFSET]);
+		pr_info("[S6E63M0] [G] %#04X -> %#04X\n", buf_G, s6e63m0_22_gamma_table[G_OFFSET]);
 	} else {
-		pr_info("s6e63m0: invalid input\n");
+		pr_info("[S6E63M0] invalid input\n");
 	}
 
 	return len;
@@ -2261,12 +2298,12 @@ static ssize_t s6e63m0_sysfs_store_filter_B(struct device *dev,
 
 	/* 2.2 mode */ /* smart dimming only */
 	if (lcd->gamma_mode || !is_load_mtp_offset) {
-		pr_info("s6e63m0: not proper gamma mode\n");
+		pr_info("[S6E63M0] not proper gamma mode\n");
 		return -EINVAL;
 	}
 
 	if (!strncmp(buf, "reset", 5)) {
-		pr_info("s6e63m0: reset B filter\n");
+		pr_info("[S6E63M0] reset B filter\n");
 
 		B_req = false;
 		s6e63m0_gamma_ctl(lcd);
@@ -2277,7 +2314,7 @@ static ssize_t s6e63m0_sysfs_store_filter_B(struct device *dev,
 	ret = sscanf(buf, "%d", &buf_val);
 
 	if (!ret) {
-		pr_info("s6e63m0: invalid input\n");
+		pr_info("[S6E63M0] invalid input\n");
 	}
 
 	if (buf_val >= GAMMA_VAL_MIN && buf_val <= GAMMA_VAL_MAX) {
@@ -2288,9 +2325,9 @@ static ssize_t s6e63m0_sysfs_store_filter_B(struct device *dev,
 
 		s6e63m0_gamma_ctl(lcd);
 
-		pr_info("s6e63m0: [B] %#04X -> %#04X\n", buf_B, s6e63m0_22_gamma_table[B_OFFSET]);
+		pr_info("[S6E63M0] [B] %#04X -> %#04X\n", buf_B, s6e63m0_22_gamma_table[B_OFFSET]);
 	} else {
-		pr_info("s6e63m0: invalid input\n");
+		pr_info("[S6E63M0] invalid input\n");
 	}
 
 	return len;
@@ -2324,7 +2361,10 @@ static DEVICE_ATTR(brightness_update, 0644,
 static ssize_t s6e63m0_sysfs_show_illumination(struct device *dev,
 				      struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%d\n", illumination_val);
+	sprintf(buf, "Illumination control [%s]\n", illumination_req ? "*" : " ");
+	sprintf(buf, "%sillumination val: [%d]\n", buf, illumination_val);
+
+	return strlen(buf);
 }
 
 static ssize_t s6e63m0_sysfs_store_illumination(struct device *dev,
@@ -2336,7 +2376,7 @@ static ssize_t s6e63m0_sysfs_store_illumination(struct device *dev,
 	int ret;
 
 	if (!strncmp(buf, "reset", 5)) {
-		pr_err("s6e63m0: use illumination table now\n");
+		pr_err("[S6E63M0] use illumination table now\n");
 
 		illumination_req = false;
 		update_brightness(lcd, 1);
@@ -2347,13 +2387,13 @@ static ssize_t s6e63m0_sysfs_store_illumination(struct device *dev,
 	ret = sscanf(buf, "%d", &buf_val);
 
 	if (!ret) {
-		pr_err("s6e63m0: invalid inputs!\n");
+		pr_err("[S6E63M0] invalid inputs!\n");
 		return -EINVAL;
 	}
 
 	#if 0
 	if (buf_val > ILLUMINATION_MAX) {
-		pr_err("s6e63m0: invalid inputs!\n");
+		pr_err("[S6E63M0] invalid inputs!\n");
 		return -EINVAL;
 	}
 	#endif
@@ -2361,7 +2401,7 @@ static ssize_t s6e63m0_sysfs_store_illumination(struct device *dev,
 	illumination_req = true;
 	illumination_val = buf_val;
 
-	pr_info("s6e63m0: custom illumination [%d]\n", illumination_val);
+	pr_info("[S6E63M0] custom illumination [%d]\n", illumination_val);
 
 	update_brightness(lcd, 1);
 
@@ -2398,26 +2438,26 @@ static ssize_t s6e63m0_sysfs_store_illumination_table(struct device *dev,
 	ret = sscanf(buf, "%d %d", &num, &val);
 
 	if (!ret) {
-		pr_err("s6e63m0: invalid inputs!\n");
+		pr_err("[S6E63M0] invalid inputs!\n");
 		return -EINVAL;
 	}
 
 	if (num < 0 || num > 25) {
-		pr_err("s6e63m0: invalid range!\n");
+		pr_err("[S6E63M0] invalid range!\n");
 		return -EINVAL;
 	}
 
 	if (num != 0 && (illumination_tabel[num - 1] > val)) {
-		pr_err("s6e63m0: the value inputed should be larger than the prev\n");
+		pr_err("[S6E63M0] the value inputed should be larger than the prev\n");
 		return -EINVAL;
 	}
 
 	if (num != 25 && (illumination_tabel[num + 1] < val)) {
-		pr_err("s6e63m0: the value inputed should be smaller than the next\n");
+		pr_err("[S6E63M0] the value inputed should be smaller than the next\n");
 		return -EINVAL;
 	}
 
-	pr_info("s6e63m0: illumination table [%02d] %02d -> %02d\n", num, illumination_tabel[num], val);
+	pr_info("[S6E63M0] illumination table [%02d] %02d -> %02d\n", num, illumination_tabel[num], val);
 	illumination_tabel[num] = val;
 
 	update_brightness(lcd, 1);
@@ -2446,12 +2486,12 @@ static ssize_t s6e63m0_sysfs_store_ulow_brightness(struct device *dev,
 	ret = sscanf(buf, "%d", &buf_val);
 
 	if (!ret) {
-		pr_err("s6e63m0: invalid inputs!\n");
+		pr_err("[S6E63M0] invalid inputs!\n");
 		return -EINVAL;
 	}
 
 	if (buf_val != 0 && buf_val != 1) {
-		pr_err("s6e63m0: invalid inputs!\n");
+		pr_err("[S6E63M0] invalid inputs!\n");
 		return -EINVAL;
 	}
 
@@ -2460,7 +2500,7 @@ static ssize_t s6e63m0_sysfs_store_ulow_brightness(struct device *dev,
 	if (illumination_req)
 		illumination_val = ILLUMINATION_MIN;
 
-	pr_info("s6e63m0: ulow brightness %s\n", illumination_req ? "enable" : "disable");
+	pr_info("[S6E63M0] ulow brightness %s\n", illumination_req ? "enable" : "disable");
 
 	update_brightness(lcd, 1);
 
@@ -2679,6 +2719,47 @@ static ssize_t s6e63m0_sysfs_store_mcde_chnl(struct device *dev,
 static DEVICE_ATTR(mcde_chnl, 0644,
 		s6e63m0_sysfs_show_mcde_chnl, s6e63m0_sysfs_store_mcde_chnl);
 
+static ssize_t s6e63m0_sysfs_show_lcdclk(struct device *dev,
+				      struct device_attribute *attr, char *buf)
+{
+	int i;
+	bool matched;
+
+	sprintf(buf, "Current: %s\n\n", lcdclk_prop[lcdclk_usr].name);
+
+	for (i = 0; i <= 3; i++) {
+		if (i == lcdclk_usr)
+			matched = true;
+		else
+			matched = false;
+
+		sprintf(buf, "%s[%d][%s] %s\n", buf, i, matched ? "*" : " ", lcdclk_prop[i].name);
+	}
+
+	return strlen(buf);
+}
+
+static ssize_t s6e63m0_sysfs_store_lcdclk(struct device *dev,
+				       struct device_attribute *attr,
+				       const char *buf, size_t len)
+{
+	int ret, tmp;
+
+	ret = sscanf(buf, "%d", &tmp);
+	if (!ret || (tmp < 0) || (tmp > 3)) {
+		pr_err("[S6E63M0] Bad cmd\n");
+		return -EINVAL;
+	}
+
+	lcdclk_usr = tmp;
+
+	schedule_work(&s6e63m0_lcdclk_work);
+
+	return len;
+}
+
+static DEVICE_ATTR(lcdclk, 0644, s6e63m0_sysfs_show_lcdclk, s6e63m0_sysfs_store_lcdclk);
+
 /* TODO: Debug the panel id issue */
 static ssize_t s6e63m0_sysfs_show_panel_smtid(struct device *dev,
 				      struct device_attribute *attr, char *buf)
@@ -2771,7 +2852,7 @@ static int s6e63m0_set_power_mode(struct mcde_display_device *ddev,
 	}
 
 	if (orig_mode != ddev->power_mode)
-		dev_warn(&ddev->dev, "Power from mode %d to %d\n",
+		pr_err("[S6E63M0] Power from mode %d to %d\n",
 			orig_mode, ddev->power_mode);
 
 	ret =  mcde_chnl_set_power_mode(ddev->chnl_state, ddev->power_mode);
@@ -2828,8 +2909,8 @@ static int __devinit s6e63m0_spi_probe(struct spi_device *spi)
 
 	#ifdef SMART_DIMMING
 	s6e63m0_read_panel_id(lcd, lcd_id);
-	pr_info("s6e63m0: lcd id: %#04X\n", lcd_id[1]);
-	pr_info("s6e63m0: smart dimming lcd id: %#04X\n", SMART_MTP_PANEL_ID);
+	pr_info("[S6E63M0] LCD ID [%#04X]\n", lcd_id[1]);
+//	pr_info("[S6E63M0] smart dimming lcd id: %#04X\n", SMART_MTP_PANEL_ID);
 //	if (lcd_id[1] >= SMART_MTP_PANEL_ID) {
 		if (!is_load_mtp_offset) {
 		#if 0
@@ -2995,6 +3076,10 @@ static int __devinit s6e63m0_mcde_panel_probe(struct mcde_display_device *ddev)
 	if (ret < 0)
 		dev_err(&(ddev->dev), "failed to add sysfs entries\n");
 
+	ret = device_create_file(&(ddev->dev), &dev_attr_lcdclk);
+	if (ret < 0)
+		dev_err(&(ddev->dev), "failed to add sysfs entries\n");
+
 	lcd->spi_drv.driver.name	= "pri_lcd_spi";
 	lcd->spi_drv.driver.bus		= &spi_bus_type;
 	lcd->spi_drv.driver.owner	= THIS_MODULE;
@@ -3075,7 +3160,7 @@ static int s6e63m0_mcde_panel_resume(struct mcde_display_device *ddev)
 	int ret;
 //	struct s6e63m0 *lcd = dev_get_drvdata(&ddev->dev);
 	DPI_DISP_TRACE;
-	dev_info(&ddev->dev, "Invoked %s\n", __func__);
+	pr_err("[S6E63M0] MCDE panel resumed\n");
 
 	/* set_power_mode will handle call platform_enable */
 	ret = ddev->set_power_mode(ddev, MCDE_DISPLAY_PM_STANDBY);
@@ -3091,7 +3176,7 @@ static int s6e63m0_mcde_panel_suspend(struct mcde_display_device *ddev, pm_messa
 	int ret = 0;
 //	struct s6e63m0 *lcd = dev_get_drvdata(&ddev->dev);
 
-	dev_info(&ddev->dev, "Invoked %s\n", __func__);
+	pr_err("[S6E63M0] MCDE panel suspended\n");
 
 	/*
 	 * when lcd panel is suspend, lcd panel becomes off
@@ -3124,7 +3209,7 @@ static pin_cfg_t janice_resume_pins[] = {
 static int dpi_display_platform_enable(struct s6e63m0 *lcd)
 {
 	int res = 0;
-	dev_info(lcd->dev, "%s\n", __func__);
+	pr_err("[S6E63M0] Display enabled\n");
 	nmk_config_pins(janice_resume_pins, ARRAY_SIZE(janice_resume_pins));
 	res = ux500_pins_enable(dpi_pins);
 	if (res)
@@ -3135,7 +3220,7 @@ static int dpi_display_platform_enable(struct s6e63m0 *lcd)
 static int dpi_display_platform_disable(struct s6e63m0 *lcd)
 {
 	int res = 0;
-	dev_info(lcd->dev, "%s\n", __func__);
+	pr_err("[S6E63M0] Display disabled\n");
 	nmk_config_pins(janice_sleep_pins, ARRAY_SIZE(janice_sleep_pins));
 
 	/* pins disabled to save power */
@@ -3168,6 +3253,11 @@ static void s6e63m0_mcde_panel_late_resume(struct early_suspend *earlysuspend)
 
 	dpi_display_platform_enable(lcd);
 	s6e63m0_mcde_panel_resume(lcd->ddev);
+
+	if (lcdclk_usr != 0) {
+		pr_err("[S6E63M0] Rebasing LCDCLK...\n");
+		schedule_work(&s6e63m0_lcdclk_work);
+	}
 }
 #endif
 
@@ -3203,7 +3293,7 @@ static int __init s6e63m0_init(void)
 
 	ret = ux500_pins_enable(dpi_pins);
 	if (ret)
-		pr_err("s6e63m0: failed to enable mcde-dpi pins during init\n");
+		pr_err("[S6E63M0] failed to enable mcde-dpi pins during init\n");
 	#endif
 
         return ret;
