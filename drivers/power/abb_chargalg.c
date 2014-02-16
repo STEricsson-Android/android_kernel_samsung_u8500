@@ -45,13 +45,43 @@
 	struct ab8500_chargalg, chargalg_psy);
 
 /* cocafe: Real end of charged */
+#include <linux/ab8500-ponkey.h>
+#include <linux/earlysuspend.h>
+
 #define CHARGING_PAUSED			-1
 #define CHARGING_STOPPED		0
 #define CHARGING_WORKING		1
+
+static struct early_suspend ab8500_chargalg_earlysuspend;
+
 static int charging_stats = CHARGING_STOPPED;
 
+static bool eoc_noticed = 0;
 static bool eoc_first = 0;
 static bool eoc_real = 0;
+static bool is_suspend = 0;
+
+static void ab8500_chargalg_early_suspend(struct early_suspend *h)
+{
+	is_suspend = 1;
+}
+
+static void ab8500_chargalg_late_resume(struct early_suspend *h)
+{
+	is_suspend = 0;
+}
+
+static void eoc_wakeup_thread(struct work_struct *eoc_wakeup_work)
+{
+	pr_err("[abb-chargalg] [fn] EOC wakeup\n");
+
+	ab8500_ponkey_emulator(1);
+	msleep(100);
+	ab8500_ponkey_emulator(0);
+
+	eoc_noticed = 1;
+}
+static DECLARE_WORK(eoc_wakeup_work, eoc_wakeup_thread);
 
 enum ab8500_chargers {
 	NO_CHG,
@@ -988,6 +1018,9 @@ for the %d time, out of %d before EOC\n",  di->eoc_cnt_1st, EOC_COND_CNT_1ST);
 				power_supply_changed(&di->chargalg_psy);
 				dev_dbg(di->dev, "Charging is end\n");
 				eoc_real = 1;
+				/* Wakeup device to notice user */
+				if (!eoc_noticed && is_suspend)
+					schedule_work_on(0, &eoc_wakeup_work);
 			} else {
 				dev_dbg(di->dev,
 				" real EOC limit reached for the %d"
@@ -2451,75 +2484,11 @@ static ssize_t abb_chargalg_eoc_real_show(struct kobject *kobj, struct kobj_attr
 
 static struct kobj_attribute abb_chargalg_eoc_real_interface = __ATTR(eoc_real, 0444, abb_chargalg_eoc_real_show, NULL);
 
-static ssize_t abb_chargalg_chargalg_control_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
-{
-	sprintf(buf, "[Suspended]:\n");
-	sprintf(buf, "%sAC: %s\n", buf, p_di->susp_status.ac_suspended ? "Y" : "N");
-	sprintf(buf, "%sUSB: %s\n", buf, p_di->susp_status.usb_suspended ? "Y" : "N");
-	sprintf(buf, "%sChar: %s\n", buf, p_di->susp_status.suspended_change ? "Y" : "N");
-
-	return strlen(buf);
-}
-
-static ssize_t abb_chargalg_chargalg_control_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
-{
-	if (!strncmp(buf, "stop", 4)) {
-		/* Disable charging */
-		p_di->susp_status.ac_suspended = true;
-		p_di->susp_status.usb_suspended = true;
-		p_di->susp_status.suspended_change = true;
-		/* Trigger a state change */
-		queue_work(p_di->chargalg_wq,
-			&p_di->chargalg_work);
-
-		return count;
-	}
-
-	if (!strncmp(buf, "start", 5)) {
-		pr_err("abb-chargalg: resched charger work queue\n");
-
-		/* Trigger a state change */
-		queue_work(p_di->chargalg_wq,
-			&p_di->chargalg_work);
-		
-		return count;
-	}
-
-	if (!strncmp(buf, "AC", 2)) {
-		/* Enable AC Charging */
-		p_di->susp_status.ac_suspended = false;
-		p_di->susp_status.suspended_change = true;
-		/* Trigger a state change */
-		queue_work(p_di->chargalg_wq,
-			&p_di->chargalg_work);
-
-		return count;
-	}
-
-	if (!strncmp(buf, "USB", 3)) {
-		/* Enable USB charging */
-		p_di->susp_status.usb_suspended = false;
-		p_di->susp_status.suspended_change = true;
-		/* Trigger a state change */
-		queue_work(p_di->chargalg_wq,
-			&p_di->chargalg_work);
-
-		return count;
-	}
-
-	pr_err("abb-chargalg: cmd: [AC] [USB] [stop] [start]\n");
-
-	return count;
-}
-
-static struct kobj_attribute abb_chargalg_chargalg_control_interface = __ATTR(chargalg, 0644, abb_chargalg_chargalg_control_show, abb_chargalg_chargalg_control_store);
-
 static struct attribute *abb_chargalg_attrs[] = {
 	&abb_chargalg_charging_stats_interface.attr, 
 	&abb_chargalg_eoc_stats_interface.attr, 
 	&abb_chargalg_eoc_first_interface.attr, 
 	&abb_chargalg_eoc_real_interface.attr, 
-	&abb_chargalg_chargalg_control_interface.attr, 
 	NULL,
 };
 
@@ -2687,16 +2656,22 @@ static int __devinit ab8500_chargalg_probe(struct platform_device *pdev)
 	abb_chargalg_kobject = kobject_create_and_add("abb-chargalg", kernel_kobj);
 
 	if (!abb_chargalg_kobject) {
-		pr_info("abb-chargalg: faile to register sysfs kobj\n");
+		pr_info("abb-chargalg: Failed to register sysfs kobj\n");
 		return -ENOMEM;
 	}
 
 	ret = sysfs_create_group(abb_chargalg_kobject, &abb_chargalg_interface_group);
 
 	if (ret) {
-		pr_info("abb-chargalg: faile to register sysfs group\n");
+		pr_info("abb-chargalg: Failed to register sysfs group\n");
 		kobject_put(abb_chargalg_kobject);
 	}
+
+	ab8500_chargalg_earlysuspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN;
+	ab8500_chargalg_earlysuspend.suspend = ab8500_chargalg_early_suspend;
+	ab8500_chargalg_earlysuspend.resume = ab8500_chargalg_late_resume;
+
+	register_early_suspend(&ab8500_chargalg_earlysuspend);
 
 	/* Run the charging algorithm */
 	queue_delayed_work(di->chargalg_wq, &di->chargalg_periodic_work, 0);
