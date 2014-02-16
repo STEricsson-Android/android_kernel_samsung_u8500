@@ -15,7 +15,8 @@
  *
  */
 
-#define TOUCH_BOOSTER
+/* #define TOUCH_BOOSTER */
+/* #define TOUCH_DEBUGGER */
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -138,17 +139,26 @@ static u32 parameter3_t48_addr;
 static u8 parameter3_t48_val;
 
 /* cocafe: Touch Booster Control */
+#ifdef TOUCH_BOOSTER
 #define TOUCHBOOST_FREQ_DEF		400000
+#define TOUCHBOOST_DELAY_DEF		500
 
 static bool touchboost = true;
 static bool touchboost_ape = true;
 static bool touchboost_ddr = true;
 static unsigned int touchboost_freq = TOUCHBOOST_FREQ_DEF;
+static unsigned int touchboost_delay = TOUCHBOOST_DELAY_DEF;
 
-/* cocafe: SweepToWake */
-/* FIXME: Will cause ux500 pins wakeup now */
-#define ABS_THRESHOLD_X			150
+#endif /* TOUCH_BOOSTER */
+
+/* cocafe: SweepToWake with wakelock implementation */
+#define ABS_THRESHOLD_X			120
 #define ABS_THRESHOLD_Y			240
+
+#if CONFIG_HAS_WAKELOCK
+#include <linux/wakelock.h>
+static struct wake_lock s2w_wakelock;
+#endif
 
 static int x_press, x_release;
 static int y_press, y_release;
@@ -160,6 +170,17 @@ static bool is_suspend = false;
 static bool waking_up = false;
 
 static bool sweep2wake = false;
+
+/* Sweep2Sleep - Original code: BOOTMGR@Github */
+/* #define TOUCH_S2S */
+#ifdef TOUCH_S2S
+/* Using 3 fingers */
+#define S2S_FINGERS_USING		2
+#define S2S_THRESHOLD			450
+
+static bool sweep2sleep = false;
+static unsigned int sweep2sleep_y;
+#endif /* TOUCH_S2S */
 
 static void mxt224e_ponkey_thread(struct work_struct *mxt224e_ponkey_work)
 {
@@ -719,7 +740,7 @@ void check_chip_calibration(struct mxt224_data *data)
 		if (try_ctr > 10) {
 
 			/* Failed! */
-			printk(KERN_ERR "[TSP] Diagnostic Data did not update!!\n");
+			printk(KERN_ERR "[TSP] Diagnostic data didn't update!!\n");
 			mxt_timer_state = 0;
 			break;
 		}
@@ -777,8 +798,10 @@ void check_chip_calibration(struct mxt224_data *data)
 			}
 		}
 
+		#ifdef TOUCH_DEBUGGER
 		if (debug_mask)
 			printk(KERN_INFO "[TSP] t: %d  a: %d\n", tch_ch, atch_ch);
+		#endif
 
 		/* send page up command so we can detect
 		   when data updates next time,
@@ -791,7 +814,7 @@ void check_chip_calibration(struct mxt224_data *data)
 		if (tch_ch+atch_ch >= 25) {
 			/* cal was bad - must recalibrate
 			   and check afterwards */
-			printk(KERN_ERR "[TSP] tch_ch+atch_ch  Calibration was bad\n");
+			printk(KERN_ERR "[TSP] tch_ch+atch_ch Calibration was bad\n");
 			calibrate_chip();
 			mxt_timer_state = 0;
 			mxt_time_point = jiffies_to_msecs(jiffies);
@@ -855,7 +878,7 @@ void check_chip_calibration(struct mxt224_data *data)
 				/* we cannot confirm if good or bad -
 				   we must wait for next touch message
 				   to confirm */
-				printk(KERN_ERR "[TSP] Calibration was not decided yet\n");
+				printk(KERN_ERR "[TSP] Calibration is waiting\n");
 				cal_check_flag = 1u;
 				mxt_timer_state = 0;
 				mxt_time_point = jiffies_to_msecs(jiffies);
@@ -1021,6 +1044,53 @@ err:
 	return ret;
 }
 
+#ifdef TOUCH_BOOSTER
+static void mxt224e_touchbooster(struct mxt224_data *data, bool enable)
+{
+	if (enable) {
+		if (touchboost_ape) {
+			prcmu_qos_update_requirement(
+				PRCMU_QOS_APE_OPP,
+				(char *)data->client->name,
+				PRCMU_QOS_APE_OPP_MAX);
+		}
+		if (touchboost_ddr) {
+			prcmu_qos_update_requirement(
+				PRCMU_QOS_DDR_OPP,
+				(char *)data->client->name,
+				PRCMU_QOS_DDR_OPP_MAX);
+		}
+		/* Allow to disable cpufreq requirement */
+		if (touchboost_freq != 0) {
+			prcmu_qos_update_requirement(
+				PRCMU_QOS_ARM_KHZ,
+				(char *)data->client->name,
+				touchboost_freq);
+		}
+	} else {
+		prcmu_qos_update_requirement(
+			PRCMU_QOS_APE_OPP,(
+			char *)data->client->name,
+			PRCMU_QOS_DEFAULT_VALUE);
+		prcmu_qos_update_requirement(
+			PRCMU_QOS_DDR_OPP,
+			(char *)data->client->name,
+			PRCMU_QOS_DEFAULT_VALUE);
+		prcmu_qos_update_requirement(
+			PRCMU_QOS_ARM_KHZ,
+			(char *)data->client->name,
+			PRCMU_QOS_DEFAULT_VALUE);
+	}
+}
+
+struct delayed_work mxt224e_touchbooster_off;
+
+static void mxt224e_touchbooster_offwork(struct work_struct *work)
+{
+	mxt224e_touchbooster(copy_data, false);
+}
+#endif
+
 static void report_input_data(struct mxt224_data *data)
 {
 	int id;
@@ -1035,28 +1105,11 @@ static void report_input_data(struct mxt224_data *data)
 		goto out;
 
 	#if defined(TOUCH_BOOSTER)
-	if (touchboost && !is_suspend) {
+	if (touchboost) {
 		if (data->fingers[id].state == MXT224_STATE_PRESS) {
 			if (data->finger_cnt == 0) {
-				if (touchboost_ape) {
-					prcmu_qos_update_requirement(
-						PRCMU_QOS_APE_OPP,
-						(char *)data->client->name,
-						PRCMU_QOS_APE_OPP_MAX);
-				}
-				if (touchboost_ddr) {
-					prcmu_qos_update_requirement(
-						PRCMU_QOS_DDR_OPP,
-						(char *)data->client->name,
-						PRCMU_QOS_DDR_OPP_MAX);
-				}
-				/* Allow to disable cpufreq requirement */
-				if (touchboost_freq != 0) {
-					prcmu_qos_update_requirement(
-						PRCMU_QOS_ARM_KHZ,
-						(char *)data->client->name,
-						touchboost_freq);
-				}
+				cancel_delayed_work(&mxt224e_touchbooster_off);
+				mxt224e_touchbooster(data, true);
 			}
 
 			data->finger_cnt++;
@@ -1064,20 +1117,10 @@ static void report_input_data(struct mxt224_data *data)
 		} else if (data->fingers[id].state == MXT224_STATE_RELEASE) {
 			if (data->finger_cnt > 0)
 				data->finger_cnt--;
-	
+
 			if (data->finger_cnt == 0) {
-				prcmu_qos_update_requirement(
-					PRCMU_QOS_APE_OPP,(
-					char *)data->client->name,
-					PRCMU_QOS_DEFAULT_VALUE);
-				prcmu_qos_update_requirement(
-					PRCMU_QOS_DDR_OPP,
-					(char *)data->client->name,
-					PRCMU_QOS_DEFAULT_VALUE);
-				prcmu_qos_update_requirement(
-					PRCMU_QOS_ARM_KHZ,
-					(char *)data->client->name,
-					PRCMU_QOS_DEFAULT_VALUE);
+				schedule_delayed_work(&mxt224e_touchbooster_off, 
+					msecs_to_jiffies(touchboost_delay));
 			}
 		}
 	}
@@ -1098,6 +1141,7 @@ static void report_input_data(struct mxt224_data *data)
 				ABS_MT_TOUCH_MAJOR, data->fingers[id].w);
 	}
 
+	#ifdef TOUCH_DEBUGGER
 	if (debug_mask) {	/* This is noisy */	/* But helpful in debugging */
 		if (data->fingers[id].state == MXT224_STATE_PRESS || data->fingers[id].state == MXT224_STATE_RELEASE) {
 			printk("[TSP] id[%d] x=%d y=%d z=%d w=%d\n",
@@ -1105,6 +1149,7 @@ static void report_input_data(struct mxt224_data *data)
 				data->fingers[id].z, data->fingers[id].w);
 		}
 	}
+	#endif
 
 	if (is_suspend) {
 		if (sweep2wake) {
@@ -1122,6 +1167,20 @@ static void report_input_data(struct mxt224_data *data)
 			}
 		}
 	}
+	
+	#ifdef TOUCH_S2S
+	if (!is_suspend) {
+		if (sweep2sleep) {
+			if (data->fingers[S2S_FINGERS_USING].state == MXT224_STATE_PRESS) {
+				sweep2sleep_y = data->fingers[S2S_FINGERS_USING].y;
+			}
+			if (data->fingers[S2S_FINGERS_USING].state == MXT224_STATE_RELEASE) {
+				if (abs(data->fingers[S2S_FINGERS_USING].y - sweep2sleep_y) >= S2S_THRESHOLD)
+					schedule_work(&mxt224e_ponkey_work);
+			}
+		}
+	}
+	#endif /* TOUCH_S2S */
 
 	if (data->fingers[id].state == MXT224_STATE_RELEASE)
 		data->fingers[id].state = MXT224_STATE_INACTIVE;
@@ -1274,7 +1333,7 @@ static int median_err_setting(struct mxt224_data *data)
 			write_mem(copy_data, obj_address+22, 1, &value);
 			value = 38;
 			write_mem(copy_data, obj_address+25, 1, &value);
-			value = 40;
+			value = 20;
 			write_mem(copy_data, obj_address+35, 1, &value);
 			value = 81;
 			write_mem(copy_data, obj_address+39, 1, &value);
@@ -1475,18 +1534,7 @@ static int mxt224_internal_suspend(struct mxt224_data *data)
 	#if defined(TOUCH_BOOSTER)
 	if (touchboost) {
 		if (data->finger_cnt > 0) {
-			prcmu_qos_update_requirement(
-				PRCMU_QOS_APE_OPP,(
-				char *)data->client->name,
-				PRCMU_QOS_DEFAULT_VALUE);
-			prcmu_qos_update_requirement(
-				PRCMU_QOS_DDR_OPP,
-				(char *)data->client->name,
-				PRCMU_QOS_DEFAULT_VALUE);
-			prcmu_qos_update_requirement(
-				PRCMU_QOS_ARM_KHZ,
-				(char *)data->client->name,
-				PRCMU_QOS_DEFAULT_VALUE);
+			mxt224e_touchbooster(data, false);
 	
 			data->finger_cnt = 0;
 		}
@@ -1563,22 +1611,14 @@ static void mxt224_early_suspend(struct early_suspend *h)
 		goto out;
 
 	if (sweep2wake) {
+
+		#ifdef TOUCH_BOOSTER
 		if (data->finger_cnt > 0) {
-			prcmu_qos_update_requirement(
-				PRCMU_QOS_APE_OPP,
-				(char *)data->client->name,
-				PRCMU_QOS_DEFAULT_VALUE);
-			prcmu_qos_update_requirement(
-				PRCMU_QOS_DDR_OPP,
-				(char *)data->client->name,
-				PRCMU_QOS_DEFAULT_VALUE);
-			prcmu_qos_update_requirement(
-				PRCMU_QOS_ARM_KHZ,
-				(char *)data->client->name,
-				PRCMU_QOS_DEFAULT_VALUE);
+			mxt224e_touchbooster(data, false);
 	
 			data->finger_cnt = 0;
 		}
+		#endif /* TOUCH_BOOSTER */
 	
 		/* nmk_config_pins(janice_mxt224e_pins_wakeup, ARRAY_SIZE(janice_mxt224e_pins_wakeup)); */
 
@@ -2634,6 +2674,10 @@ static ssize_t mxt224e_sweep2wake_show(struct kobject *kobj, struct kobj_attribu
 	sprintf(buf, "status: %s\n", sweep2wake ? "on" : "off");
 	sprintf(buf, "%sthreshold_x: %d\n", buf, x_threshold);
 	sprintf(buf, "%sthreshold_y: %d\n", buf, y_threshold);
+	#if CONFIG_HAS_WAKELOCK
+	sprintf(buf, "%swakelock_ena: %d\n", buf, wake_lock_active(&s2w_wakelock));
+	#endif
+
 	return strlen(buf);
 }
 
@@ -2649,6 +2693,10 @@ static ssize_t mxt224e_sweep2wake_store(struct kobject *kobj, struct kobj_attrib
 		}
 		sweep2wake = true;
 
+		#if CONFIG_HAS_WAKELOCK
+		wake_lock(&s2w_wakelock);
+		#endif
+
 		pr_err("[TSP] Sweep2Wake On\n");
 
 		return count;
@@ -2659,6 +2707,10 @@ static ssize_t mxt224e_sweep2wake_store(struct kobject *kobj, struct kobj_attrib
 			mxt224e_tsp_off();
 		}
 		sweep2wake = false;
+
+		#if CONFIG_HAS_WAKELOCK
+		wake_unlock(&s2w_wakelock);
+		#endif
 
 		pr_err("[TSP] Sweep2Wake Off\n");
 
@@ -2690,11 +2742,58 @@ static ssize_t mxt224e_sweep2wake_store(struct kobject *kobj, struct kobj_attrib
 		
 		return count;
 	}
+
+	#if CONFIG_HAS_WAKELOCK
+	/* For development activity */
+	if (!strncmp(&buf[0], "wakelock=", 9)) {
+		sscanf(&buf[9], "%d", &ret);
+
+		if (!ret)
+			wake_unlock(&s2w_wakelock);
+		else
+			wake_lock(&s2w_wakelock);
+		
+		return count;
+	}
+	#endif
 		
 	return count;
 }
 
 static struct kobj_attribute mxt224e_sweep2wake_interface = __ATTR(sweep2wake, 0644, mxt224e_sweep2wake_show, mxt224e_sweep2wake_store);
+
+#ifdef TOUCH_S2S
+static ssize_t mxt224e_sweep2sleep_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	sprintf(buf, "status: %s\n", sweep2sleep ? "on" : "off");
+	sprintf(buf, "%sthreshold: %d\n", buf, S2S_THRESHOLD);
+
+	return strlen(buf);
+}
+
+static ssize_t mxt224e_sweep2sleep_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	if (!strncmp(buf, "on", 2)) {
+		sweep2sleep = true;
+
+		pr_err("[TSP] Sweep2Sleep On\n");
+
+		return count;
+	}
+
+	if (!strncmp(buf, "off", 3)) {
+		sweep2sleep = false;
+
+		pr_err("[TSP] Sweep2Sleep Off\n");
+
+		return count;
+	}
+		
+	return count;
+}
+
+static struct kobj_attribute mxt224e_sweep2sleep_interface = __ATTR(sweep2sleep, 0644, mxt224e_sweep2sleep_show, mxt224e_sweep2sleep_store);
+#endif
 
 static ssize_t mxt224e_config_t48_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -3047,12 +3146,6 @@ static ssize_t mxt224e_config_t7_store(struct kobject *kobj, struct kobj_attribu
 static struct kobj_attribute mxt224e_config_t7_interface = __ATTR(config_t7, 0644, mxt224e_config_t7_show, mxt224e_config_t7_store);
 
 #ifdef TOUCH_BOOSTER
-static void mxt224e_touchboost_clear(void)
-{
-	prcmu_qos_update_requirement(PRCMU_QOS_APE_OPP, (char *)copy_data->client->name, PRCMU_QOS_DEFAULT_VALUE);
-	prcmu_qos_update_requirement(PRCMU_QOS_DDR_OPP, (char *)copy_data->client->name, PRCMU_QOS_DEFAULT_VALUE);
-	prcmu_qos_update_requirement(PRCMU_QOS_ARM_KHZ, (char *)copy_data->client->name, PRCMU_QOS_DEFAULT_VALUE);
-}
 
 static ssize_t mxt224e_touchboost_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -3081,7 +3174,7 @@ static ssize_t mxt224e_touchboost_store(struct kobject *kobj, struct kobj_attrib
 	}
 
 	if (!touchboost)
-		mxt224e_touchboost_clear();
+		mxt224e_touchbooster(copy_data, false);
 
 	pr_err("[TSP] TouchBoost %s\n", touchboost ? "enable" : "disable");
 		
@@ -3105,19 +3198,9 @@ static ssize_t mxt224e_touchboost_freq_store(struct kobject *kobj, struct kobj_a
 	if (!ret)
 		return -EINVAL;
 
-	if (tbuf != 0 && 
-	    tbuf != 200000 && 
-	    tbuf != 400000 && 
-	    tbuf != 800000 && 
-	    tbuf != 1000000) 
-	{
-		pr_err("[TSP] passed an invalid cpufreq\n");
-		return -EINVAL;
-	}
-
 	touchboost_freq = tbuf;
 
-	mxt224e_touchboost_clear();
+	mxt224e_touchbooster(copy_data, false);
 
 	pr_err("[TSP] TouchBoost cpufreq: %d\n", touchboost_freq);
 		
@@ -3125,6 +3208,31 @@ static ssize_t mxt224e_touchboost_freq_store(struct kobject *kobj, struct kobj_a
 }
 
 static struct kobj_attribute mxt224e_touchboost_freq_interface = __ATTR(touchboost_freq, 0644, mxt224e_touchboost_freq_show, mxt224e_touchboost_freq_store);
+
+static ssize_t mxt224e_touchboost_delay_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", touchboost_delay);
+}
+
+static ssize_t mxt224e_touchboost_delay_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	int tbuf;
+
+	ret = sscanf(buf, "%d", &tbuf);
+
+	if (!ret)
+		return -EINVAL;
+
+	if (tbuf < 0)
+		return -EINVAL;
+
+	touchboost_delay = tbuf;
+		
+	return count;
+}
+
+static struct kobj_attribute mxt224e_touchboost_delay_interface = __ATTR(touchboost_delay, 0644, mxt224e_touchboost_delay_show, mxt224e_touchboost_delay_store);
 
 static ssize_t mxt224e_touchboost_ape_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -3149,8 +3257,8 @@ static ssize_t mxt224e_touchboost_ape_store(struct kobject *kobj, struct kobj_at
 
 	touchboost_ape = tbuf;
 
-	mxt224e_touchboost_clear();
-		
+	mxt224e_touchbooster(copy_data, false);
+
 	return count;
 }
 
@@ -3179,8 +3287,8 @@ static ssize_t mxt224e_touchboost_ddr_store(struct kobject *kobj, struct kobj_at
 
 	touchboost_ddr = tbuf;
 
-	mxt224e_touchboost_clear();
-		
+	mxt224e_touchbooster(copy_data, false);
+
 	return count;
 }
 
@@ -3672,6 +3780,9 @@ static struct kobj_attribute mxt224e_parameter3_t48_interface = __ATTR(parameter
 
 static struct attribute *mxt224e_attrs[] = {
 	&mxt224e_sweep2wake_interface.attr, 
+#ifdef TOUCH_S2S
+	&mxt224e_sweep2sleep_interface.attr, 
+#endif
 	&mxt224e_config_t7_interface.attr, 
 	&mxt224e_config_t8_interface.attr, 
 	&mxt224e_config_t9_interface.attr, 
@@ -3682,6 +3793,7 @@ static struct attribute *mxt224e_attrs[] = {
 #ifdef TOUCH_BOOSTER
 	&mxt224e_touchboost_interface.attr, 
 	&mxt224e_touchboost_freq_interface.attr, 
+	&mxt224e_touchboost_delay_interface.attr, 
 	&mxt224e_touchboost_ape_interface.attr, 
 	&mxt224e_touchboost_ddr_interface.attr, 
 #endif
@@ -3876,7 +3988,7 @@ static int __devinit mxt224_probe(struct i2c_client *client,
 	noise_median.t46_actvsyncsperx_for_mferr = 40;
 	noise_median.t48_mfinvlddiffthr_for_mferr = 12;
 	noise_median.t48_mferrorthr_for_mferr = 19;
-	noise_median.t48_thr_for_mferr = 35;
+	noise_median.t48_thr_for_mferr = 20;
 	noise_median.t48_movfilter_for_mferr = 0;
 #else
 	noise_median.t46_actvsyncsperx_for_mferr = 38;
@@ -3896,7 +4008,7 @@ static int __devinit mxt224_probe(struct i2c_client *client,
 				  PRCMU_QOS_DEFAULT_VALUE);
 	prcmu_qos_add_requirement(PRCMU_QOS_ARM_KHZ, (char *)client->name,
 				  PRCMU_QOS_DEFAULT_VALUE);
-	dev_info(&client->dev, "add_prcmu_qos is added\n");
+	INIT_DELAYED_WORK(&mxt224e_touchbooster_off, mxt224e_touchbooster_offwork);
 #endif
 
 	valid_touch = 0;
@@ -4040,6 +4152,9 @@ static int __devinit mxt224_probe(struct i2c_client *client,
 		kobject_put(mxt224e_kobject);
 	}
 
+#if CONFIG_HAS_WAKELOCK
+	wake_lock_init(&s2w_wakelock, WAKE_LOCK_SUSPEND, "s2w_wakelock");
+#endif
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	data->early_suspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN + 1;
@@ -4099,6 +4214,10 @@ static int __devexit mxt224_remove(struct i2c_client *client)
 	prcmu_qos_remove_requirement(PRCMU_QOS_APE_OPP, (char *)client->name);
 	prcmu_qos_remove_requirement(PRCMU_QOS_DDR_OPP, (char *)client->name);
 	prcmu_qos_remove_requirement(PRCMU_QOS_ARM_KHZ, (char *)client->name);
+#endif
+
+#if CONFIG_HAS_WAKELOCK
+	wake_lock_destroy(&s2w_wakelock);
 #endif
 
 	kfree(data->objects);
